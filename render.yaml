@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: bulk-stk-push
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: FITYPAY_BASE_URL
+        value: https://api.kinaracloud.online/v1/start
+      - key: FITYPAY_MANAGEMENT_TOKEN
+        sync: false
+      - key: FITYPAY_PRODUCT_TOKEN
+        sync: false
