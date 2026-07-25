@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bulk STK Push Dispatcher</title>
+  <style>
+    :root { --bg: #0f172a; --card: #1e293b; --accent: #10b981; --text: #f8fafc; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 2rem; }
+    .container { max-width: 900px; margin: 0 auto; display: grid; gap: 1.5rem; }
+    .card { background: var(--card); padding: 1.5rem; border-radius: 8px; border: 1px solid #334155; }
+    h1, h2 { margin-top: 0; }
+    .form-group { margin-bottom: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+    label { font-size: 0.9rem; color: #94a3b8; font-weight: bold; }
+    input, textarea, button { font-family: inherit; font-size: 1rem; padding: 0.75rem; border-radius: 6px; border: 1px solid #475569; background: #0f172a; color: white; }
+    textarea { height: 120px; resize: vertical; }
+    button { background: var(--accent); color: #022c22; font-weight: bold; border: none; cursor: pointer; transition: opacity 0.2s; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .terminal { background: #000; padding: 1rem; border-radius: 6px; font-family: monospace; height: 250px; overflow-y: auto; font-size: 0.85rem; border: 1px solid #334155; }
+    .log-SUCCESS { color: #34d399; }
+    .log-FAILED { color: #f87171; }
+    .log-INFO { color: #38bdf8; }
+    .badge { display: inline-block; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
+    .badge-running { background: #854d0e; color: #fef08a; }
+    .badge-idle { background: #064e3b; color: #a7f3d0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>🚀 Bulk STK Push Dispatcher</h1>
+      <p style="color: #94a3b8;">Throttled at <strong>15 requests per minute</strong> (4 seconds interval).</p>
+      
+      <form id="pushForm">
+        <div class="form-group">
+          <label for="phoneNumbers">Phone Numbers (One per line or comma-separated)</label>
+          <textarea id="phoneNumbers" placeholder="0712345678&#10;254798765432" required></textarea>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <label for="amount">Amount (KES)</label>
+            <input type="number" id="amount" value="10" min="1" required />
+          </div>
+          <div class="form-group">
+            <label for="description">Reference / Description</label>
+            <input type="text" id="description" value="Bulk Payment" placeholder="e.g. Invoice #102" />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="webhookUrl">Webhook Callback URL (Optional)</label>
+          <input type="url" id="webhookUrl" placeholder="https://yourdomain.com/api/v1/webhook" />
+        </div>
+
+        <button type="submit" id="submitBtn">Start Bulk Execution</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+        <h2>Execution Logs</h2>
+        <span id="statusBadge" class="badge badge-idle">IDLE</span>
+      </div>
+      <div id="terminal" class="terminal"></div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('pushForm');
+    const submitBtn = document.getElementById('submitBtn');
+    const terminal = document.getElementById('terminal');
+    const statusBadge = document.getElementById('statusBadge');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const rawNumbers = document.getElementById('phoneNumbers').value;
+      const amount = document.getElementById('amount').value;
+      const description = document.getElementById('description').value;
+      const webhookUrl = document.getElementById('webhookUrl').value;
+
+      // Parse comma or newline separated numbers
+      const phoneNumbers = rawNumbers
+        .split(/[\n,]/)
+        .map(n => n.trim())
+        .filter(n => n.length > 0);
+
+      if (phoneNumbers.length === 0) {
+        alert('Please enter at least one valid phone number.');
+        return;
+      }
+
+      try {
+        submitBtn.disabled = true;
+        const res = await fetch('/api/bulk-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phoneNumbers, amount, description, webhookUrl })
+        });
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+
+        alert(`Bulk operation started! Estimated time: ~${data.estimatedMinutes} minute(s).`);
+      } catch (err) {
+        alert('Error initiating bulk push: ' + err.message);
+        submitBtn.disabled = false;
+      }
+    });
+
+    // Poll logs every 2 seconds
+    setInterval(async () => {
+      try {
+        const res = await fetch('/api/logs');
+        const data = await res.json();
+
+        statusBadge.textContent = data.isProcessing ? 'PROCESSING' : 'IDLE';
+        statusBadge.className = `badge ${data.isProcessing ? 'badge-running' : 'badge-idle'}`;
+        submitBtn.disabled = data.isProcessing;
+
+        terminal.innerHTML = data.logs.map(log => {
+          const time = new Date(log.timestamp).toLocaleTimeString();
+          return `<div class="log-${log.type}">[${time}] [${log.type}] [${log.phone}] ${log.message}</div>`;
+        }).join('');
+      } catch (e) {
+        console.error('Failed to poll logs:', e);
+      }
+    }, 2000);
+  </script>
+</body>
+</html>
