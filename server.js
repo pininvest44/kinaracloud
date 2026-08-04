@@ -20,6 +20,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // In-memory queue state & log tracker
 let processingQueue = false;
 const logHistory = [];
+const MAX_LOGS = 500;
 
 function addLog(type, phone, message, details = null) {
   const logEntry = {
@@ -30,47 +31,85 @@ function addLog(type, phone, message, details = null) {
     details,
   };
   logHistory.unshift(logEntry);
-  if (logHistory.length > 500) logHistory.pop(); // Keep last 500 logs
+  if (logHistory.length > MAX_LOGS) {
+    logHistory.length = MAX_LOGS; // Keep log array bounded
+  }
 }
 
 /**
- * Queue Processor: 15 Requests per Minute
- * Rate = 1 req every 4,000 milliseconds (60s / 15 = 4s)
+ * Queue Processor: 15 Requests per Minute (4,000 ms spacing)
+ * Features dynamic 60-second backoff on HTTP 429 / Rate Limit responses
  */
 async function processBulkPush(phoneNumbers, amount, description, webhookUrl) {
   processingQueue = true;
-  addLog('INFO', 'SYSTEM', `Starting bulk execution for ${phoneNumbers.length} numbers (15 req/min pace).`);
+  addLog('INFO', 'SYSTEM', `Starting bulk execution for ${phoneNumbers.length} numbers.`);
 
-  const DELAY_BETWEEN_REQUESTS_MS = 11000; // 11 seconds per request = 15 requests / min
+  const BASE_DELAY_MS = 4000;     // 4 seconds (15 requests / min pace)
+  const BACKOFF_DELAY_MS = 60000;  // 60-second cooldown on rate limit
 
-  for (let i = 0; i < phoneNumbers.length; i++) {
-    const phone = phoneNumbers[i].trim();
+  try {
+    for (let i = 0; i < phoneNumbers.length; i++) {
+      const phone = phoneNumbers[i].trim();
 
-    if (!phone) continue;
+      if (!phone) continue;
 
-    try {
-      addLog('INFO', phone, `[${i + 1}/${phoneNumbers.length}] Initiating STK Push...`);
+      let success = false;
+      let retried = false;
 
-      const response = await sendStkPush({
-        phone,
-        amount,
-        description,
-        webhookUrl,
-      });
+      while (!success) {
+        try {
+          addLog('INFO', phone, `[${i + 1}/${phoneNumbers.length}] Initiating STK Push...`);
 
-      addLog('SUCCESS', phone, `Push sent successfully`, response);
-    } catch (err) {
-      addLog('FAILED', phone, err.message);
+          const response = await sendStkPush({
+            phone,
+            amount,
+            description,
+            webhookUrl,
+          });
+
+          addLog('SUCCESS', phone, `Push sent successfully`, response);
+          success = true;
+        } catch (err) {
+          const errorMessage = (err.message || '').toLowerCase();
+          const statusCode = err.status || err.statusCode || err.response?.status;
+
+          // Check for HTTP 429 or rate-limit messages from FityPay / Safaricom
+          const isRateLimited =
+            statusCode === 429 ||
+            errorMessage.includes('too many requests') ||
+            errorMessage.includes('rate limit') ||
+            errorMessage.includes('quota exceeded');
+
+          if (isRateLimited && !retried) {
+            addLog(
+              'FAILED',
+              phone,
+              `Rate limit hit (HTTP 429 / Too Many Requests). Pausing execution for 60 seconds...`
+            );
+
+            // Pause queue for 60 seconds before retrying current number
+            await new Promise((resolve) => setTimeout(resolve, BACKOFF_DELAY_MS));
+
+            addLog('INFO', phone, `Resuming process after 60s cooldown. Retrying number...`);
+            retried = true; // Retry once; if it fails again, log and move to next
+          } else {
+            addLog('FAILED', phone, err.message || 'STK Push failed');
+            success = true; // Exit retry loop and move to next number
+          }
+        }
+      }
+
+      // Base rate-limiting delay between requests (except last)
+      if (i < phoneNumbers.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, BASE_DELAY_MS));
+      }
     }
-
-    // Wait 4 seconds before triggering the next request (except for the last item)
-    if (i < phoneNumbers.length - 1) {
-      await new Promise((resolve) => setTimeout(resolve, DELAY_BETWEEN_REQUESTS_MS));
-    }
+  } catch (fatalErr) {
+    addLog('FAILED', 'SYSTEM', `Fatal queue execution error: ${fatalErr.message}`);
+  } finally {
+    processingQueue = false;
+    addLog('INFO', 'SYSTEM', `Bulk process finished.`);
   }
-
-  processingQueue = false;
-  addLog('INFO', 'SYSTEM', `Bulk process finished.`);
 }
 
 // POST endpoint to trigger bulk push
@@ -91,13 +130,16 @@ app.post('/api/bulk-push', (req, res) => {
     return res.status(400).json({ error: 'Amount must be greater than 0.' });
   }
 
+  const ESTIMATED_SECONDS_PER_REQ = 4;
+  const estimatedMinutes = Math.ceil((phoneNumbers.length * ESTIMATED_SECONDS_PER_REQ) / 60);
+
   // Trigger background execution without blocking API response
   processBulkPush(phoneNumbers, amount, description, webhookUrl);
 
   return res.status(202).json({
     message: 'Bulk STK process initiated successfully.',
     total: phoneNumbers.length,
-    estimatedMinutes: Math.ceil((phoneNumbers.length * 4) / 60),
+    estimatedMinutes,
   });
 });
 
