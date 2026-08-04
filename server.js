@@ -41,7 +41,7 @@ async function processBulkPush(phoneNumbers, amount, description, webhookUrl) {
   processingQueue = true;
   addLog('INFO', 'SYSTEM', `Starting bulk execution for ${phoneNumbers.length} numbers (15 req/min pace).`);
 
-  const DELAY_BETWEEN_REQUESTS_MS = 8000; // 8 seconds per request = 15 requests / min
+  const DELAY_BETWEEN_REQUESTS_MS = 11000; // 11 seconds per request = 15 requests / min
 
   for (let i = 0; i < phoneNumbers.length; i++) {
     const phone = phoneNumbers[i].trim();
