@@ -78,13 +78,14 @@ async function processBulkPush(phoneNumbers, amount, description, webhookUrl) {
             statusCode === 429 ||
             errorMessage.includes('too many requests') ||
             errorMessage.includes('rate limit') ||
-            errorMessage.includes('quota exceeded');
+            errorMessage.includes('quota exceeded') ||
+            errorMessage.includes('too many different phone numbers');
 
           if (isRateLimited && !retried) {
             addLog(
               'FAILED',
               phone,
-              `Rate limit hit (HTTP 429 / Too Many Requests). Pausing execution for 60 seconds...`
+              `Rate limit hit ("${err.message}"). Pausing execution for 60 seconds...`
             );
 
             // Pause queue for 60 seconds before retrying current number
