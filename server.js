@@ -44,7 +44,7 @@ async function processBulkPush(phoneNumbers, amount, description, webhookUrl) {
   processingQueue = true;
   addLog('INFO', 'SYSTEM', `Starting bulk execution for ${phoneNumbers.length} numbers.`);
 
-  const BASE_DELAY_MS = 3000;     // 4 seconds (15 requests / min pace)
+  const BASE_DELAY_MS = 4000;     // 4 seconds (15 requests / min pace)
   const BACKOFF_DELAY_MS = 30000;  // 30-second cooldown on rate limit
 
   try {
